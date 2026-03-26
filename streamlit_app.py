@@ -423,11 +423,11 @@ def _detect_notebooklm_logo_cv(video_path, progress_cb=None):
     """Use OpenCV to detect the NotebookLM logo on the front page.
     Extracts the bottom-right logo from a middle frame as a template,
     then searches the front page (top half) for the same logo via
-    multi-scale template matching. Falls back to contour detection.
+    multi-scale template matching.
     Returns (x, y, w, h) in 1920x1080 coordinates, or None.
     """
     if not CV2_AVAILABLE:
-        if progress_cb: progress_cb("OpenCV not available, using fallback position")
+        if progress_cb: progress_cb("OpenCV not available")
         return None
     try:
         duration = _probe_duration(str(video_path))
@@ -457,7 +457,7 @@ def _detect_notebooklm_logo_cv(video_path, progress_cb=None):
         bh = min(int(WM_BR_H * sy_m), mh - by)
         template = mid_img[by:by+bh, bx:bx+bw]
         if template.size == 0:
-            return _detect_badge_contours_cv(front_img)
+            return None
 
         # --- Step 2: multi-scale template matching on front page top half ---
         search_h = int(fh * 0.50)
@@ -490,11 +490,7 @@ def _detect_notebooklm_logo_cv(video_path, progress_cb=None):
             if progress_cb: progress_cb(f"   CV match at ({rx},{ry}) {rw}x{rh}  conf={best_val:.2f}")
             return (rx, ry, rw, rh)
 
-        # --- Step 3: fallback – contour detection ---
-        result = _detect_badge_contours_cv(front_img)
-        if result and progress_cb:
-            progress_cb(f"   Contour fallback at {result}")
-        return result
+        return None
 
     except Exception as e:
         if progress_cb: progress_cb(f"   CV detection error: {e}")
@@ -504,60 +500,6 @@ def _detect_notebooklm_logo_cv(video_path, progress_cb=None):
         except: pass
         try: os.unlink(tf_front)
         except: pass
-
-
-def _detect_badge_contours_cv(frame):
-    """Fallback: detect badge-shaped rectangles in the top portion of a frame.
-    Returns (x, y, w, h) in 1920x1080 coordinates or None."""
-    if not CV2_AVAILABLE:
-        return None
-    h, w = frame.shape[:2]
-    search_h = int(h * 0.35)
-    roi = frame[0:search_h, :]
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-
-    min_w = int(150 * w / 1920); max_w = int(600 * w / 1920)
-    min_h_c = int(30 * h / 1080); max_h_c = int(120 * h / 1080)
-
-    candidates = []
-    # Binary threshold – badge is typically lighter than surrounding background
-    for thresh in [180, 200, 220]:
-        _, binary = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            cx, cy, cw, ch = cv2.boundingRect(cnt)
-            if min_w < cw < max_w and min_h_c < ch < max_h_c:
-                aspect = cw / ch if ch > 0 else 0
-                if 2 < aspect < 10:
-                    dist_center = abs(cx + cw / 2 - roi.shape[1] / 2)
-                    score = cw * ch / (1 + dist_center * 0.1)
-                    candidates.append((cx, cy, cw, ch, score))
-
-    # Edge-based fallback
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges   = cv2.Canny(blurred, 50, 150)
-    kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
-    edges   = cv2.dilate(edges, kernel, iterations=2)
-    edges   = cv2.erode(edges, kernel, iterations=1)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in contours:
-        cx, cy, cw, ch = cv2.boundingRect(cnt)
-        if min_w < cw < max_w and min_h_c < ch < max_h_c:
-            aspect = cw / ch if ch > 0 else 0
-            if 2 < aspect < 10:
-                dist_center = abs(cx + cw / 2 - roi.shape[1] / 2)
-                score = cw * ch / (1 + dist_center * 0.1)
-                candidates.append((cx, cy, cw, ch, score))
-
-    if candidates:
-        best = max(candidates, key=lambda c: c[4])
-        sx, sy = 1920 / w, 1080 / h
-        pad = 6
-        return (max(0, int((best[0] - pad) * sx)),
-                max(0, int((best[1] - pad) * sy)),
-                int((best[2] + pad * 2) * sx),
-                int((best[3] + pad * 2) * sy))
-    return None
 
 
 def _detect_top_watermark_end(path, max_scan=120.0, badge_box=None):
@@ -620,22 +562,23 @@ def remove_notebooklm_watermark(inp, out, src_resolution, tmp, progress_cb=None)
     # --- OpenCV logo detection for front-page badge ---
     if progress_cb: progress_cb("Detecting front-page logo with OpenCV…")
     cv_badge = _detect_notebooklm_logo_cv(inp_str, progress_cb=progress_cb)
-    badge_x, badge_y, badge_w, badge_h = cv_badge if cv_badge else (WM_TOP_X, WM_TOP_Y, WM_TOP_W, WM_TOP_H)
-    if cv_badge:
-        if progress_cb: progress_cb(f"   CV detected badge at ({badge_x},{badge_y}) {badge_w}x{badge_h}")
-    else:
-        if progress_cb: progress_cb("   CV detection failed, using fallback coordinates")
-
-    if progress_cb: progress_cb("Detecting top watermark duration…")
-    top_end = _detect_top_watermark_end(inp_str, badge_box=(badge_x, badge_y, badge_w, badge_h))
     top_png = tmp / "wm_top.png"
-    if top_end > 0.5:
-        if progress_cb: progress_cb(f"   Badge visible until ~{top_end:.1f}s")
-        _make_box_png([(badge_x, badge_y, badge_w, badge_h, BOX_RADIUS)],
-                      top_png, colour=(249, 249, 249, 255))
-        use_top = True; en_top = f"lte(t\\,{top_end:.2f})"
+    if cv_badge:
+        badge_x, badge_y, badge_w, badge_h = cv_badge
+        if progress_cb: progress_cb(f"   CV detected badge at ({badge_x},{badge_y}) {badge_w}x{badge_h}")
+        if progress_cb: progress_cb("Detecting top watermark duration…")
+        top_end = _detect_top_watermark_end(inp_str, badge_box=(badge_x, badge_y, badge_w, badge_h))
+        if top_end > 0.5:
+            if progress_cb: progress_cb(f"   Badge visible until ~{top_end:.1f}s")
+            _make_box_png([(badge_x, badge_y, badge_w, badge_h, BOX_RADIUS)],
+                          top_png, colour=(249, 249, 249, 255))
+            use_top = True; en_top = f"lte(t\\,{top_end:.2f})"
+        else:
+            if progress_cb: progress_cb("   Badge not visible long enough — skipping")
+            Image.new("RGBA", (1920, 1080), (0,0,0,0)).save(str(top_png), "PNG")
+            use_top = False; en_top = "0"
     else:
-        if progress_cb: progress_cb("   No top badge detected — skipping")
+        if progress_cb: progress_cb("   No front-page badge detected — skipping")
         Image.new("RGBA", (1920, 1080), (0,0,0,0)).save(str(top_png), "PNG")
         use_top = False; en_top = "0"
     if use_logo:
