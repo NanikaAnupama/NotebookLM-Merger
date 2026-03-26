@@ -52,10 +52,10 @@ LOGO_H            = 44
 LOGO_RIGHT_MARGIN = 113
 LOGO_BOTTOM_MARGIN = 53
 
-MS_CLIENT_ID = "772dd850-50bd-4c97-9152-d1b3e78fb737"
+MS_CLIENT_ID = st.secrets.get("MS_CLIENT_ID", "")
 MS_SCOPES    = ["https://graph.microsoft.com/Files.ReadWrite", "https://graph.microsoft.com/User.Read"]
-ONEDRIVE_FOLDER_URL = "https://globaledulinkuk-my.sharepoint.com/:f:/g/personal/content_gamification_imperiallearning_co_uk/IgDpo-qQQhSNS5aOw2lBAFo-ASQb3KWLDkHS9kp6sIHuy0s?e=3Ualc4"
-MS_AUTHORITY = "https://login.microsoftonline.com/globaledulinkuk.onmicrosoft.com"
+ONEDRIVE_FOLDER_URL = st.secrets.get("ONEDRIVE_FOLDER_URL", "")
+MS_AUTHORITY = st.secrets.get("MS_AUTHORITY", "https://login.microsoftonline.com/common")
 
 TEAL, WHITE = (96, 204, 190), (255, 255, 255)
 
